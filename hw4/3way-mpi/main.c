@@ -1,23 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <mpi.h>
+#include <stdbool.h>
+#include <string.h>
 
-#define BATCH_SIZE 5000
+#include <mpi/mpi.h>
+
+#define MAX_BATCH_SIZE 5000
+
+#define TAG_CHILD_KILL -1
 
 
-int max(const char *line) {
-	int result = 0;
+char max(const char *line, size_t len) {
+	char result = 0;
 
-	while(*line) {
-		result = (*line > result) ? *line : result;
-		line += 1;
+	for(size_t i = 0; i < len; i += 1) {
+		result = (line[i] > result) ? line[i] : result;
 	}
 
 	return result;
 }
 
 int main(int argc, char **argv) {
-	MPI_Status status;
 	int pid;
 	int num_processes = 0;
 
@@ -40,52 +43,134 @@ int main(int argc, char **argv) {
 
 	/* Read in file contents */
 	if(pid == 0) {
-		FILE *fp = NULL;
+		MPI_Status status;
 		bool keep_reading = true;
-		// Open the file for reading
-		fp = fopen(argv[2], "r");
+		FILE *fp = fopen(argv[2], "r");
 
 		if(!fp) {
 			perror("Error opening file");
+			MPI_Abort(MPI_COMM_WORLD, 1);
 
 			return 1;
 		}
 
+		// Receiving
+		char maxes[MAX_BATCH_SIZE] = { 0 };
+		// Sending
+		size_t lens[MAX_BATCH_SIZE] = { 0 };
+		char *lines[MAX_BATCH_SIZE] = { 0 };
+
+		// Current line in the entire file
+		size_t line = 0;
+
 		// Process
 		while(keep_reading) {
-			char *lines[BATCH_SIZE] = { 0 };
-			char maxes[BATCH_SIZE] = { 0 };
-			size_t lens[BATCH_SIZE] = { 0 };
+			size_t process_batch_size = 0;
 			size_t batch_size = 0;
 
-			for (int i = 0; i < BATCH_SIZE; i++) {
-				ssize_t read = getline(&lines[i], &lens[i], file);
+			for(int i = 0; i < MAX_BATCH_SIZE; i++) {
+				ssize_t read = getline(&lines[i], &lens[i], fp);
 
+				// EOF
 				if(read == -1) {
-					keep_reading = 0;   // End of file reached
+					keep_reading = 0;
 					break;
 				}
 
-				current_batch_size++;
+				batch_size++;
 			}
 
-			if(current_batch_size == 0) {
+			if(batch_size == 0) {
 				break;
 			}
 
-			for(size_t i = 0; i < current_batch_size; i += 1) {
-				free(lines[i]);
+			process_batch_size = batch_size / num_processes;
+
+			for(int p = 1; p < num_processes; p += 1) {
+				size_t start = (p - 1) * process_batch_size;
+				size_t count = (p == num_processes) ? (batch_size - start) : process_batch_size;
+
+				MPI_Send(&count, 1, MPI_UNSIGNED_LONG_LONG, p, 0, MPI_COMM_WORLD);
+				MPI_Send(&lens[start], count, MPI_UNSIGNED_LONG_LONG, p, 0, MPI_COMM_WORLD);
+
+				// Send lines to children
+				for(size_t li = 0; li < count; li += 1) {
+					MPI_Send(lines[start + li], lens[start + li], MPI_CHAR, p, 0, MPI_COMM_WORLD);
+				}
+
 			}
 
+			int processes_running = num_processes - 1;
+
+			while(processes_running != 0) {
+				char temp_maxes[MAX_BATCH_SIZE] = { 0 };
+
+				MPI_Recv(&temp_maxes, process_batch_size, MPI_CHAR, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+				processes_running -= 1;
+				memcpy(&maxes[(status.MPI_SOURCE - 1) * process_batch_size], temp_maxes, process_batch_size);
+			}
+
+			for(size_t i = 0; i < batch_size; i += 1) {
+				printf("%zu: %d\n", line, maxes[i]);
+				line += 1;
+				free(lines[i]);
+			}
 		}
 
-
-		fclose(fp);
-		printf("hello from master\n");
-
+		for(int p = 1; p < num_processes; p++) {
+			size_t stop = 0;
+			MPI_Send(&stop, 1, MPI_UNSIGNED_LONG_LONG, p, TAG_CHILD_KILL, MPI_COMM_WORLD);
+		}
 		fclose(fp);
 	} else {
-		printf("hello from %d\n", pid);
+		while(true) {
+			// Receiving
+			size_t process_batch_size = 0;
+			size_t *lens = NULL;
+			MPI_Status child_status;
+			// Sending
+			char *maxes = NULL;
+
+			// Receive process batch size
+			MPI_Recv(&process_batch_size, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &child_status);
+
+			if(child_status.MPI_TAG == TAG_CHILD_KILL) {
+				break;
+			}
+
+			// Allocate memory for maxesupfront
+			maxes = malloc(process_batch_size * sizeof(*maxes));
+
+			if(maxes == NULL) {
+				// Error
+			}
+
+			// Receive length
+			lens = malloc(process_batch_size * sizeof(*lens));
+
+			if(lens == NULL) {
+				// Error
+			}
+
+			MPI_Recv(lens, process_batch_size, MPI_UNSIGNED_LONG_LONG, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &child_status);
+
+			for(size_t i = 0; i < process_batch_size; i += 1) {
+				char *line = malloc((lens[i] + 1) * sizeof(*line));
+
+				if(line == NULL) {
+					// Error
+					break;
+				}
+
+				MPI_Recv(line, lens[i], MPI_CHAR, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &child_status);
+				maxes[i] = max(line, lens[i]);
+				free(line);
+			}
+
+			MPI_Send(maxes, process_batch_size, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
+			free(lens);
+			free(maxes);
+		}
 	}
 
 	MPI_Finalize();
