@@ -3,18 +3,17 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include <mpi/mpi.h>
+#include <mpi.h>
 
 #define MAX_BATCH_SIZE 5000
-
-#define TAG_CHILD_KILL -1
+#define TAG_CHILD_KILL 0xFF
 
 
 char max(const char *line, size_t len) {
 	char result = 0;
 
 	for(size_t i = 0; i < len; i += 1) {
-		result = (line[i] > result) ? line[i] : result;
+		result = (line[i] > result && line[i] != '\n') ? line[i] : result;
 	}
 
 	return result;
@@ -59,7 +58,6 @@ int main(int argc, char **argv) {
 		// Sending
 		size_t lens[MAX_BATCH_SIZE] = { 0 };
 		char *lines[MAX_BATCH_SIZE] = { 0 };
-
 		// Current line in the entire file
 		size_t line = 0;
 
@@ -84,11 +82,12 @@ int main(int argc, char **argv) {
 				break;
 			}
 
-			process_batch_size = batch_size / num_processes;
+			process_batch_size = batch_size / (num_processes - 1);
 
+			/* Divide work to children */
 			for(int p = 1; p < num_processes; p += 1) {
 				size_t start = (p - 1) * process_batch_size;
-				size_t count = (p == num_processes) ? (batch_size - start) : process_batch_size;
+				size_t count = process_batch_size;
 
 				MPI_Send(&count, 1, MPI_UNSIGNED_LONG_LONG, p, 0, MPI_COMM_WORLD);
 				MPI_Send(&lens[start], count, MPI_UNSIGNED_LONG_LONG, p, 0, MPI_COMM_WORLD);
@@ -100,18 +99,32 @@ int main(int argc, char **argv) {
 
 			}
 
+			printf("Process batch_size: %zu\n", process_batch_size * (num_processes - 1));
+
+			/* Master work, should be a lot smaller than the others so do now */
+			{
+				size_t master_start = process_batch_size * (num_processes - 1);
+				size_t count = batch_size - master_start;
+
+				for(size_t li = 0; li < count; li += 1) {
+					maxes[li + master_start] = max(lines[li + master_start], lens[li + master_start]);
+				}
+			}
+
+			/* Non blocking wait for result */
 			int processes_running = num_processes - 1;
 
 			while(processes_running != 0) {
 				char temp_maxes[MAX_BATCH_SIZE] = { 0 };
 
-				MPI_Recv(&temp_maxes, process_batch_size, MPI_CHAR, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+				MPI_Recv(&temp_maxes, process_batch_size, MPI_CHAR,
+					 MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 				processes_running -= 1;
 				memcpy(&maxes[(status.MPI_SOURCE - 1) * process_batch_size], temp_maxes, process_batch_size);
 			}
 
 			for(size_t i = 0; i < batch_size; i += 1) {
-				printf("%zu: %d\n", line, maxes[i]);
+				printf("%zu: %d\n", line + 1, maxes[i]);
 				line += 1;
 				free(lines[i]);
 			}
@@ -121,6 +134,7 @@ int main(int argc, char **argv) {
 			size_t stop = 0;
 			MPI_Send(&stop, 1, MPI_UNSIGNED_LONG_LONG, p, TAG_CHILD_KILL, MPI_COMM_WORLD);
 		}
+
 		fclose(fp);
 	} else {
 		while(true) {

@@ -1,4 +1,4 @@
- #!/bin/bash
+#!/bin/bash
 
 # Set the name of the source code file and the executable
 SRC=main.c
