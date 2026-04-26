@@ -27,24 +27,13 @@ int main(int argc, char **argv) {
 	MPI_Comm_rank(MPI_COMM_WORLD, &pid);
 	MPI_Comm_size(MPI_COMM_WORLD, &num_processes);
 
-	if(argc < 3) {
-		fprintf(stderr, "Usage: %s <num_threads> <file_path>\n", argv[0]);
-		MPI_Abort(MPI_COMM_WORLD, 1);
-
-		return 1;
-	}
-
-	num_processes = atoi(argv[1]);
-
-	if(num_processes < 1) {
-		num_processes = 1;
-	}
+	printf("%d\n", num_processes);
 
 	/* Read in file contents */
 	if(pid == 0) {
 		MPI_Status status;
 		bool keep_reading = true;
-		FILE *fp = fopen(argv[2], "r");
+		FILE *fp = fopen("/homes/eyv/cis520/wiki_dump.txt", "r");
 
 		if(!fp) {
 			perror("Error opening file");
@@ -125,8 +114,9 @@ int main(int argc, char **argv) {
 
 			for(size_t i = 0; i < batch_size; i += 1) {
 				printf("%zu: %d\n", line + 1, maxes[i]);
-				line += 1;
 				free(lines[i]);
+				lines[i] = NULL;
+				line += 1;
 			}
 		}
 
