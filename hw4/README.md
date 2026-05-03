@@ -35,3 +35,36 @@ Example:
 To get precise execution durations you can run 
 
 time ./pthreads_app 4 ~eyv/cis520/wiki_dump.txt
+
+
+## Compiling 3way-openmp
+To compile openmp version on Beocat:
+1. Navigate to openmp directory:
+    cd 3way-openmp
+
+2. Load required module:
+    module load CMake/3.23.1-GCCcore-11.3.0 foss/2022a OpenMPI/4.1.4-GCC-11.3.0 CUDA/11.7.0
+
+3. Compile using makefile:
+    make
+   
+
+## Running and Scheduling
+1. Submit job to scheduler:
+    sbatch submit.sh
+
+2. Monitor job status:
+    squeue -u <your_eid>
+
+3. View results:
+    The output will be saved in a file named 'output_<job_id>.txt'
+
+Example to view:
+    head -n 20 output_7600430.txt
+
+## Usage
+./openmp_app <number_of_threads> <path_to_input_file>
+
+Example:
+./openmp_app 4 ~eyv/cis520/wiki_dump.txt
+
