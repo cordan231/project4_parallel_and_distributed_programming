@@ -14,7 +14,7 @@ module load CMake/3.23.1-GCCcore-11.3.0 foss/2022a
 # Set OpenMP threads
 export OMP_NUM_THREADS=1
 
-
+make
 
 # Run
 ./openmp_app 1 ~eyv/cis520/wiki_dump.txt
